@@ -1,0 +1,13 @@
+[package]
+name = "wgsl-toy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+bytemuck = { version = "1.24.0", features = ["derive"] }
+clap = { version = "4.5.51", features = ["derive"] }
+pollster = "0.4.0"
+tokio = { version = "1.48.0", features = ["full"] }
+wgpu = "27.0.1"
+winit = "0.30.12"
