@@ -1,10 +1,10 @@
 // ██╗    ██╗ ██████╗ ███████╗██╗         ████████╗ ██████╗ ██╗   ██╗
 // ██║    ██║██╔════╝ ██╔════╝██║         ╚══██╔══╝██╔═══██╗╚██╗ ██╔╝
-// ██║ █╗ ██║██║  ███╗███████╗██║            ██║   ██║   ██║ ╚████╔╝ 
-// ██║███╗██║██║   ██║╚════██║██║            ██║   ██║   ██║  ╚██╔╝  
-// ╚███╔███╔╝╚██████╔╝███████║███████╗       ██║   ╚██████╔╝   ██║   
-//  ╚══╝╚══╝  ╚═════╝ ╚══════╝╚══════╝       ╚═╝    ╚═════╝    ╚═╝   
-                                                                  
+// ██║ █╗ ██║██║  ███╗███████╗██║            ██║   ██║   ██║ ╚████╔╝
+// ██║███╗██║██║   ██║╚════██║██║            ██║   ██║   ██║  ╚██╔╝
+// ╚███╔███╔╝╚██████╔╝███████║███████╗       ██║   ╚██████╔╝   ██║
+//  ╚══╝╚══╝  ╚═════╝ ╚══════╝╚══════╝       ╚═╝    ╚═════╝    ╚═╝
+
 // High-performance shader renderer using wgpu
 // Live preview with winit or render to video file
 // Inspired by ShaderToy
@@ -110,6 +110,7 @@ struct Renderer {
     // Store padding info to avoid recalculating
     padded_bytes_per_row: u32,
     unpadded_bytes_per_row: u32,
+    surface_format: wgpu::TextureFormat, // Store format for consistency
 }
 
 // Steps:
@@ -153,6 +154,12 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
         let instance = Arc::new(instance); // Wrap instance in Arc for sharing
+
+        let surface_format = wgpu::TextureFormat::Bgra8UnormSrgb;
+
+        if verbose {
+            println!("[INIT] Using surface format: {:?}", surface_format);
+        }
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
@@ -200,7 +207,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format: surface_format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -250,6 +257,7 @@ impl Renderer {
             verbose,
             padded_bytes_per_row,
             unpadded_bytes_per_row,
+            surface_format,
         })
     }
 
@@ -264,14 +272,14 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: self.surface_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-    
+
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let output_buffer_size = (self.padded_bytes_per_row * self.height) as wgpu::BufferAddress;
-        
+
         let frame_buffers: Vec<FrameBuffer> = (0..FRAMES_AHEAD)
             .map(|i| {
                 let uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -388,12 +396,12 @@ impl Renderer {
     fn read_frame(&self, buffer_idx: usize, frame_buffers: &[FrameBuffer]) -> Vec<u8> {
         let fb = &frame_buffers[buffer_idx];
         let buffer_slice = fb.output_buffer.slice(..);
-        
+
         let (tx, rx) = std::sync::mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        
+
         let _ = self.device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: None,
@@ -401,7 +409,7 @@ impl Renderer {
         rx.recv().unwrap().unwrap();
 
         let data = buffer_slice.get_mapped_range();
-        
+
         // Remove padding from the buffer data only if present
         let result = if self.padded_bytes_per_row != self.unpadded_bytes_per_row {
             let mut unpadded = Vec::with_capacity((self.unpadded_bytes_per_row * self.height) as usize);
@@ -414,7 +422,7 @@ impl Renderer {
         } else {
             data.to_vec()
         };
-        
+
         drop(data);
         fb.output_buffer.unmap();
 
@@ -461,7 +469,7 @@ impl Renderer {
         for frame in 0..total_frames {
             let buffer_idx = frame as usize % FRAMES_AHEAD;
             let pixels = self.read_frame(buffer_idx, &frame_buffers);
-            
+
             // Submit next frame, while encoding current one
             let next_frame = frame + FRAMES_AHEAD as u32;
             if next_frame < total_frames {
@@ -485,7 +493,7 @@ impl Renderer {
 
         drop(stdin);
         let status = ffmpeg.wait()?;
-        
+
         if !status.success() {
             return Err(anyhow!("FFMpeg encoding failed"));
         }
@@ -503,7 +511,7 @@ impl Renderer {
 
     async fn run_window(self, args: Args) -> Result<()> {
         let event_loop = EventLoop::new()?;
-        
+
         println!("{}", "=".repeat(64));
         println!("Live preview window opened");
         println!("{}", "=".repeat(64));
@@ -571,7 +579,7 @@ impl ApplicationHandler for App {
         let window_attributes = winit::window::Window::default_attributes()
             .with_title("WGSL Renderer")
             .with_inner_size(winit::dpi::PhysicalSize::new(self.args.width, self.args.height));
-        
+
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
         let surface = self.renderer.instance.create_surface(window.clone()).unwrap();
 
@@ -644,7 +652,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 let time = self.start_time.unwrap().elapsed().as_secs_f32();
-                
+
                 // Use current window dimensions for uniform resolution
                 let uniforms = Uniforms {
                     resolution: [self.current_width as f32, self.current_height as f32],
@@ -721,7 +729,7 @@ async fn main() -> Result<()> {
     println!("   WGSL Shader Renderer");
     println!("{}", "=".repeat(64));
     println!("\nShader: {}", args.shader);
-    
+
     if args.render {
         println!("Mode: Render to video");
         println!("Output: {}", args.output);
@@ -730,11 +738,11 @@ async fn main() -> Result<()> {
     } else {
         println!("Mode: Live preview");
     }
-    
+
     println!("Resolution: {}*{}\n", args.width, args.height);
 
     let renderer = Renderer::new(&shader_source, args.width, args.height, args.verbose).await?;
-    
+
     if args.render {
         renderer.render_video(&args).await?;
     } else {
